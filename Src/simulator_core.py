@@ -4,20 +4,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, scrolledtext
 
 # =============================================================================
-#  مهم: برای استفاده از تم‌های مدرن، ابتدا باید این کتابخانه را نصب کنید
-#  در ترمینال یا Command Prompt خود دستور زیر را اجرا کنید:
-#  pip install ttkthemes
-# =============================================================================
-try:
-    from ttkthemes import ThemedTk
-except ImportError:
-    print("Warning: ttkthemes not found. Falling back to default theme.")
-    print("For a better look, run: pip install ttkthemes")
-    from tkinter import Tk as ThemedTk
-
-
-# =============================================================================
-#بخش ۱: هسته اصلی شبیه‌ساز (موتور)   
+#  بخش ۱: هسته اصلی شبیه‌ساز (موتور)
 # =============================================================================
 
 class Instruction:
@@ -155,45 +142,54 @@ class SimulatorGUI:
 
         self.sim = RISCVSimulator()
         self.running = False
-        self.run_speed = 50 # ms delay
+        self.run_speed = 50 
         self.prev_regs = list(self.sim.registers)
+        
+        # --- تعریف تم رنگی ---
+        self.matcha_green = "#E0EFE0"
+        self.dark_green = "#556B2F"
+        self.highlight_green = "#C1E1C1"
+        self.button_bg = "#F5F5F5"
+        
+        self.master.configure(bg=self.matcha_green)
 
         # --- استایل و تم ---
         style = ttk.Style(self.master)
-        style.configure('Treeview', rowheight=25, font=('Segoe UI', 10))
-        style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'))
-        style.configure('TButton', padding=6, relief="flat", font=('Segoe UI', 10))
-        style.configure('TLabelframe.Label', font=('Segoe UI', 11, 'bold'))
+        style.theme_use('clam') 
+
         
-        # --- تعریف رنگ‌ها برای هایلایت ---
-        self.reg_tree = None # Placeholder
-        self.master.after(100, self._configure_treeview_tags)
+        style.configure('.', background=self.matcha_green, foreground=self.dark_green, font=('Segoe UI', 10))
+        
+       
+        style.configure('TFrame', background=self.matcha_green)
+        style.configure('TLabelframe', background=self.matcha_green, bordercolor=self.dark_green)
+        style.configure('TLabelframe.Label', background=self.matcha_green, foreground=self.dark_green, font=('Segoe UI', 11, 'bold'))
+        style.configure('TButton', padding=6, relief="flat", background=self.button_bg, foreground=self.dark_green, font=('Segoe UI', 10, 'bold'))
+        style.map('TButton', background=[('active', self.highlight_green)])
+        
+        style.configure('Treeview', rowheight=25, font=('Segoe UI', 10), background="white", fieldbackground="white", foreground=self.dark_green)
+        style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'), background=self.button_bg, relief="flat")
+        style.map('Treeview.Heading', background=[('active', self.highlight_green)])
+        
+        self.reg_tree = None 
+        self.master.after(100, lambda: self.reg_tree.tag_configure('changed', background=self.highlight_green))
 
-        # --- ایجاد فریم‌های اصلی برای چیدمان ---
-        main_paned_window = ttk.PanedWindow(master, orient=tk.HORIZONTAL)
-        main_paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # --- ایجاد فریم‌های اصلی ---
+        main_frame = ttk.Frame(master, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        left_frame = ttk.Frame(main_frame, width=250)
+        left_frame.pack(side="left", fill="y", padx=(0, 10))
+        
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side="right", fill="both", expand=True)
 
-        left_frame = ttk.Frame(main_paned_window, width=250)
-        main_paned_window.add(left_frame, weight=0)
-
-        right_frame = ttk.Frame(main_paned_window)
-        main_paned_window.add(right_frame, weight=1)
-
-        # --- بخش کنترل‌ها (سمت چپ) ---
         self._create_controls(left_frame)
-
-        # --- بخش نمایشگرها (سمت راست) ---
         self._create_displays(right_frame)
 
         self.update_display()
 
-    def _configure_treeview_tags(self):
-        """ کانفیگ رنگ برای هایلایت کردن رجیسترهای تغییر کرده """
-        if self.reg_tree:
-            self.reg_tree.tag_configure('changed', background='#d0f0c0') # رنگ سبز روشن
-
     def _create_controls(self, parent):
-        """ ویجت‌های بخش کنترل را ایجاد می‌کند """
         controls_frame = ttk.LabelFrame(parent, text="Controls", padding="10")
         controls_frame.pack(fill="x", pady=(0, 10))
 
@@ -208,15 +204,13 @@ class SimulatorGUI:
         
         pc_frame = ttk.LabelFrame(parent, text="Program Counter", padding="10")
         pc_frame.pack(fill="x")
-        self.pc_label = ttk.Label(pc_frame, text="PC: 0x0000", font=("Courier", 14, 'bold'))
-        self.pc_label.pack()
+        self.pc_label = ttk.Label(pc_frame, text="PC: 0x0000", font=("Courier", 14, 'bold'), anchor="center")
+        self.pc_label.pack(fill="x")
 
     def _create_displays(self, parent):
-        """ ویجت‌های نمایش رجیستر و حافظه را ایجاد می‌کند """
         display_paned_window = ttk.PanedWindow(parent, orient=tk.VERTICAL)
         display_paned_window.pack(fill=tk.BOTH, expand=True)
 
-        # --- بخش رجیسترها با Treeview ---
         reg_frame = ttk.LabelFrame(display_paned_window, text="Registers", padding="10")
         display_paned_window.add(reg_frame, weight=1)
 
@@ -229,16 +223,14 @@ class SimulatorGUI:
         
         self.reg_tree.column('reg_name', width=80, anchor='center')
         self.reg_tree.column('abi', width=100, anchor='center')
-        
-        self.reg_tree.column('hex_val', width=150, anchor='center') # از 'w' به 'center' تغییر کرد
-        self.reg_tree.column('dec_val', width=150, anchor='center') # از 'w' به 'center' تغییر کرد
+        self.reg_tree.column('hex_val', width=150, anchor='center')
+        self.reg_tree.column('dec_val', width=150, anchor='center')
         
         self.reg_tree.pack(fill="both", expand=True)
         
-        # --- بخش حافظه ---
         mem_frame = ttk.LabelFrame(display_paned_window, text="Memory View (from 0x1000)", padding="10")
         display_paned_window.add(mem_frame, weight=1)
-        self.mem_text = scrolledtext.ScrolledText(mem_frame, height=10, width=80, font=("Courier", 10))
+        self.mem_text = scrolledtext.ScrolledText(mem_frame, height=10, width=80, font=("Courier", 10), relief="flat", borderwidth=2)
         self.mem_text.pack(fill="both", expand=True)
         self.mem_text.config(state='disabled')
 
@@ -283,23 +275,19 @@ class SimulatorGUI:
     def update_display(self):
         self.pc_label.config(text=f"PC: {self.sim.pc:#06x}")
         
-        
         abi_names = ['zero', 'ra', 'sp', 'gp', 'tp', 't0', 't1', 't2', 's0', 's1', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5',
                      'a6', 'a7', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 't3', 't4', 't5', 't6']
         
-        self.reg_tree.delete(*self.reg_tree.get_children()) 
+        self.reg_tree.delete(*self.reg_tree.get_children())
         for i in range(32):
             val = self.sim.registers[i]
             signed_val = self._get_signed_val(val, 32)
-            
             tags = ()
             if val != self.prev_regs[i]:
-                tags = ('changed',) 
-            
+                tags = ('changed',)
             self.reg_tree.insert('', 'end', iid=i, tags=tags,
                                  values=(f"x{i}", abi_names[i], f"{val:#010x}", str(signed_val)))
 
-        
         self.mem_text.config(state='normal')
         self.mem_text.delete('1.0', tk.END)
         addr_start = 0x1000
@@ -313,20 +301,11 @@ class SimulatorGUI:
         self.mem_text.config(state='disabled')
 
     def _get_signed_val(self, val, bits):
-        """ مقدار بدون علامت را به معادل علامت‌دار آن تبدیل می‌کند """
         if (val & (1 << (bits - 1))) != 0:
             val = val - (1 << bits)
         return val
 
-# --- راه‌اندازی برنامه اصلی ---
 if __name__ == "__main__":
-    # از ThemedTk برای اعمال تم استفاده می‌کنیم
-    try:
-        root = ThemedTk(theme="arc")
-    except tk.TclError:
-        print("ttkthemes not found, using default theme.")
-        root = tk.Tk()
-        
+    root = tk.Tk()
     app = SimulatorGUI(root)
     root.mainloop()
-
