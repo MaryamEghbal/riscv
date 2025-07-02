@@ -1,7 +1,3 @@
-# RISC-V Assembler - Complete Version
-# This script implements a two-pass assembler for the required RISC-V instruction set.
-# It supports directives, pseudo-instructions, and command-line arguments.
-
 import struct
 import sys
 
@@ -20,6 +16,9 @@ REGS.update({
     's11': REGS['x27'], 't3': REGS['x28'], 't4': REGS['x29'], 't5': REGS['x30'],
     't6': REGS['x31']
 })
+
+# Add floating-point registers (f0-f31)
+REGS.update({f'f{i}': f'{i:05b}' for i in range(32)})
 
 # Complete instruction definitions [opcode, funct3, funct7, format]
 OPCODES = {
@@ -60,6 +59,25 @@ OPCODES = {
     'auipc': ['0010111', None, None, 'U'],
     # J-type
     'jal':  ['1101111', None, None, 'J'],
+
+    # --- Floating-Point Instructions (RV32F) ---
+    # F-type Load/Store
+    'flw':   ['0000111', '010', None, 'I-fload'],  # Opcode 0x07, funct3 0x2
+    'fsw':   ['0100111', '010', None, 'S-fstore'], # Opcode 0x27, funct3 0x2
+
+    # F-type R-format Arithmetic Operations (Opcode 0x53, funct3 0x0)
+    # funct7 determines the specific operation
+    'fadd.s': ['1010011', '000', '0000000', 'R-float'], # Single-precision Add
+    'fsub.s': ['1010011', '000', '0000100', 'R-float'], # Single-precision Subtract
+    'fmul.s': ['1010011', '000', '0001000', 'R-float'], # Single-precision Multiply
+    'fdiv.s': ['1010011', '000', '0001100', 'R-float'], # Single-precision Divide
+
+    # F-type R-format Unary Operations (Opcode 0x53, funct3 0x0)
+    'fsqrt.s': ['1010011', '000', '0101100', 'R-float-unary'], # Single-precision Square Root
+
+    # F-type R-format Conversion Operations (Opcode 0x53, funct3 0x0)
+    'fcvt.w.s': ['1010011', '000', '1100000', 'R-float-conv'], # Convert Single-float to Word (integer)
+    'fcvt.s.w': ['1010011', '000', '1101000', 'R-float-conv'], # Convert Word (integer) to Single-float
 }
 
 # --- Helper Functions ---
@@ -89,7 +107,7 @@ def expand_pseudo_instructions(line):
         return [f'xori {rd}, {rs}, -1']
     if op == 'neg':
         rd, rs = parts[1], parts[2]
-        return [f'sub x0, {rs}, {rd}'] # Note: sub rd, x0, rs
+        return [f'sub {rd}, x0, {rs}'] # Corrected: sub rd, x0, rs
     if op == 'li':
         rd, imm_str = parts[1], parts[2]
         imm = int(imm_str, 0)
@@ -225,7 +243,41 @@ def second_pass(lines, symbol_table):
                 offset = symbol_table[label] - location_counter
                 imm_bin = to_binary(offset, 21)
                 binary_string = f"{imm_bin[0]}{imm_bin[10:20]}{imm_bin[9]}{imm_bin[1:9]}{rd}{opcode}"
+            
+            # --- Floating-Point Specific Formats ---
+            elif fmt == 'R-float': # For fadd.s, fsub.s, fmul.s, fdiv.s
+                # All three registers are floating-point registers (f-type)
+                frd, frs1, frs2 = REGS[parts[1]], REGS[parts[2]], REGS[parts[3]]
+                binary_string = f"{funct7}{frs2}{frs1}{funct3}{frd}{opcode}"
 
+            elif fmt == 'R-float-unary': # For fsqrt.s
+                # frd and frs1 are floating-point registers. rs2 is 00000.
+                frd, frs1 = REGS[parts[1]], REGS[parts[2]]
+                binary_string = f"{funct7}{REGS['x0']}{frs1}{funct3}{frd}{opcode}"
+
+            elif fmt == 'R-float-conv': # For fcvt.w.s, fcvt.s.w
+                # The first register is the destination, second is the source.
+                # Could be a mix of integer (x) and floating-point (f) registers.
+                dest_reg = REGS[parts[1]]
+                src_reg = REGS[parts[2]]
+                # rs2 is typically 00000 for standard rounding mode (RNE)
+                binary_string = f"{funct7}{REGS['x0']}{src_reg}{funct3}{dest_reg}{opcode}"
+
+            elif fmt == 'I-fload': # For flw (Floating-Point Load Word)
+                # frd is a floating-point register, rs1 is an integer register
+                frd = REGS[parts[1]]
+                offset_part, rs1_part = parts[2].replace(')','').split('(')
+                rs1, imm = REGS[rs1_part], int(offset_part, 0)
+                binary_string = f"{to_binary(imm, 12)}{rs1}{funct3}{frd}{opcode}"
+
+            elif fmt == 'S-fstore': # For fsw (Floating-Point Store Word)
+                # frs2 is a floating-point register, rs1 is an integer register
+                frs2 = REGS[parts[1]]
+                offset_part, rs1_part = parts[2].replace(')','').split('(')
+                rs1, imm = REGS[rs1_part], int(offset_part, 0)
+                imm_bin = to_binary(imm, 12)
+                binary_string = f"{imm_bin[0:7]}{frs2}{rs1}{funct3}{imm_bin[7:12]}{opcode}"
+            
             # Append the assembled instruction to the byte array
             output_bytes.extend(struct.pack('<I', int(binary_string, 2)))
             location_counter += 4
