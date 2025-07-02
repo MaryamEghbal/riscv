@@ -229,7 +229,7 @@ class SimulatorGUI:
         
         self.reg_tree.column('reg_name', width=80, anchor='center')
         self.reg_tree.column('abi', width=100, anchor='center')
-        # --- تغییر در این دو خط ---
+        
         self.reg_tree.column('hex_val', width=150, anchor='center') # از 'w' به 'center' تغییر کرد
         self.reg_tree.column('dec_val', width=150, anchor='center') # از 'w' به 'center' تغییر کرد
         
@@ -283,23 +283,23 @@ class SimulatorGUI:
     def update_display(self):
         self.pc_label.config(text=f"PC: {self.sim.pc:#06x}")
         
-        # --- به‌روزرسانی جدول رجیسترها ---
+        
         abi_names = ['zero', 'ra', 'sp', 'gp', 'tp', 't0', 't1', 't2', 's0', 's1', 'a0', 'a1', 'a2', 'a3', 'a4', 'a5',
                      'a6', 'a7', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 't3', 't4', 't5', 't6']
         
-        self.reg_tree.delete(*self.reg_tree.get_children()) # پاک کردن جدول
+        self.reg_tree.delete(*self.reg_tree.get_children()) 
         for i in range(32):
             val = self.sim.registers[i]
             signed_val = self._get_signed_val(val, 32)
             
             tags = ()
             if val != self.prev_regs[i]:
-                tags = ('changed',) # اعمال تگ برای هایلایت
+                tags = ('changed',) 
             
             self.reg_tree.insert('', 'end', iid=i, tags=tags,
                                  values=(f"x{i}", abi_names[i], f"{val:#010x}", str(signed_val)))
 
-        # --- به‌روزرسانی نمایش حافظه ---
+        
         self.mem_text.config(state='normal')
         self.mem_text.delete('1.0', tk.END)
         addr_start = 0x1000
