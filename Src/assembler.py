@@ -1,12 +1,14 @@
 # RISC-V Assembler - Final Version with Bug Fix
 # This script implements a two-pass assembler for the required RISC-V instruction set.
-# It now automatically creates the output directory if it doesn't exist.
+# It now correctly handles labels on the same line as instructions/directives.
+# It also includes a more robust parser for complex instructions and modifiers.
 
 import struct
 import sys
-import os 
+import os
+import re 
 
-# --- Data Structures and Tables  ---
+# --- Data Structures and Tables ---
 
 REGS = {f'x{i}': f'{i:05b}' for i in range(32)}
 REGS.update({
@@ -39,7 +41,7 @@ OPCODES = {
     'auipc':['0010111', None, None, 'U'],    'jal':  ['1101111', None, None, 'J'],
 }
 
-# --- Helper Functions ---
+# --- Helper Functions  ---
 
 def to_binary(n, bits, signed=True):
     if signed and n < 0:
@@ -49,15 +51,48 @@ def to_binary(n, bits, signed=True):
 def clean_line(line):
     return line.split('#')[0].strip()
 
-def expand_pseudo_instructions(line):
-    parts = [p.strip() for p in line.replace(',', ' ').split()]
+def parse_immediate(imm_str, symbol_table):
+    imm_str = imm_str.strip()
+    match = re.match(r'%(hi|lo)\((.+)\)', imm_str)
+    if match:
+        modifier, label = match.groups()
+        if label not in symbol_table:
+            raise ValueError(f"Undefined label '{label}' used in %{modifier}() modifier.")
+        address = symbol_table[label]
+        if modifier == 'hi':
+            return (address + 0x800) >> 12
+        else: # lo
+            lo_part = address & 0xFFF
+            return lo_part - 0x1000 if lo_part & 0x800 else lo_part
+    else:
+        try:
+            return int(imm_str, 0)
+        except ValueError:
+            raise ValueError(f"Invalid immediate value: '{imm_str}'.")
+
+def expand_pseudo_instructions(line, symbol_table):
+    parts = [p.strip() for p in re.split(r'[,\s]+', line, 1)]
+    if not parts: return []
     op = parts[0]
+    
+    if op == 'la':
+        args = [p.strip() for p in parts[1].split(',')]
+        rd, label = args[0], args[1]
+        return [f'auipc {rd}, %hi({label})', f'addi {rd}, {rd}, %lo({label})']
+
     if op == 'nop': return ['addi x0, x0, 0']
-    if op == 'mv': return [f'addi {parts[1]}, {parts[2]}, 0']
-    if op == 'not': return [f'xori {parts[1]}, {parts[2]}, -1']
-    if op == 'neg': return [f'sub {parts[1]}, x0, {parts[2]}']
+    if op == 'mv':
+        args = [p.strip() for p in parts[1].split(',')]
+        return [f'addi {args[0]}, {args[1]}, 0']
+    if op == 'not':
+        args = [p.strip() for p in parts[1].split(',')]
+        return [f'xori {args[0]}, {args[1]}, -1']
+    if op == 'neg':
+        args = [p.strip() for p in parts[1].split(',')]
+        return [f'sub {args[0]}, x0, {args[1]}']
     if op == 'li':
-        rd, imm_str = parts[1], parts[2]
+        args = [p.strip() for p in parts[1].split(',')]
+        rd, imm_str = args[0], args[1]
         imm = int(imm_str, 0)
         if -2048 <= imm <= 2047:
             return [f'addi {rd}, x0, {imm}']
@@ -67,25 +102,51 @@ def expand_pseudo_instructions(line):
             return [f'lui {rd}, {upper}', f'addi {rd}, {rd}, {lower}']
     return [line]
 
-# --- Main Assembler Logic 
+# --- Main Assembler Logic  ---
 
 def first_pass(lines):
     symbol_table = {}
     location_counter = 0x1000
+    temp_symbol_table = {} 
+    
+    temp_lc = 0x1000
     for line in lines:
-        if line.endswith(':'):
-            symbol_table[line[:-1]] = location_counter
-            continue
-        expanded_lines = expand_pseudo_instructions(line)
-        for expanded_line in expanded_lines:
-            parts = expanded_line.split()
+        parts = line.split()
+        if not parts: continue
+        if parts[0].endswith(':'):
+            temp_symbol_table[parts[0][:-1]] = temp_lc
+        else:
             op = parts[0]
+            if op == 'li' or op == 'la': temp_lc += 8
+            elif op.startswith('.'):
+                directive_parts = line.split()
+                if op == '.word': temp_lc += 4 * (len(directive_parts) - 1)
+                elif op == '.half': temp_lc += 2 * (len(directive_parts) - 1)
+                elif op == '.byte': temp_lc += 1 * (len(directive_parts) - 1)
+            else: temp_lc += 4
+
+    for line in lines:
+        parts = line.split()
+        if not parts: continue
+
+        if parts[0].endswith(':'):
+            label = parts[0][:-1]
+            symbol_table[label] = location_counter
+            parts = parts[1:]
+            if not parts: continue
+        
+        line_content = " ".join(parts)
+        expanded_lines = expand_pseudo_instructions(line_content, temp_symbol_table)
+        
+        for expanded_line in expanded_lines:
+            op = expanded_line.split()[0]
             if op.startswith('.'):
-                if op == '.word': location_counter += 4 * (len(parts) - 1)
-                elif op == '.half': location_counter += 2 * (len(parts) - 1)
-                elif op == '.byte': location_counter += 1 * (len(parts) - 1)
+                directive_parts = expanded_line.split()
+                if op == '.word': location_counter += 4 * (len(directive_parts) - 1)
+                elif op == '.half': location_counter += 2 * (len(directive_parts) - 1)
+                elif op == '.byte': location_counter += 1 * (len(directive_parts) - 1)
                 elif op == '.align':
-                    alignment = 2**int(parts[1])
+                    alignment = 2**int(directive_parts[1])
                     padding = (alignment - (location_counter % alignment)) % alignment
                     location_counter += padding
             else:
@@ -96,61 +157,73 @@ def second_pass(lines, symbol_table):
     output_bytes = bytearray()
     location_counter = 0x1000
     for line_num, line in enumerate(lines, 1):
-        if line.endswith(':'): continue
-        expanded_lines = expand_pseudo_instructions(line)
+        parts = line.split()
+        if not parts: continue
+        
+        line_content = line
+        if parts[0].endswith(':'):
+            line_content = " ".join(parts[1:])
+            if not line_content: continue
+
+        expanded_lines = expand_pseudo_instructions(line_content, symbol_table)
+
         for expanded_line in expanded_lines:
-            parts = [p.strip() for p in expanded_line.replace(',', ' ').split()]
-            op = parts[0]
+            tokens = [p.strip() for p in re.split(r'[,\s]+', expanded_line, 1)]
+            op = tokens[0]
+            
             if op.startswith('.'):
+                directive_parts = expanded_line.split()
                 if op == '.word':
-                    for val_str in parts[1:]:
-                        output_bytes.extend(struct.pack('<i', int(val_str, 0)))
-                        location_counter += 4
+                    for val_str in directive_parts[1:]: output_bytes.extend(struct.pack('<i', int(val_str, 0)))
                 elif op == '.half':
-                    for val_str in parts[1:]:
-                        output_bytes.extend(struct.pack('<h', int(val_str, 0)))
-                        location_counter += 2
+                    for val_str in directive_parts[1:]: output_bytes.extend(struct.pack('<h', int(val_str, 0)))
                 elif op == '.byte':
-                    for val_str in parts[1:]:
-                        output_bytes.extend(struct.pack('<b', int(val_str, 0)))
-                        location_counter += 1
+                    for val_str in directive_parts[1:]: output_bytes.extend(struct.pack('<b', int(val_str, 0)))
                 elif op == '.align':
-                    alignment = 2**int(parts[1])
+                    alignment = 2**int(directive_parts[1])
                     padding = (alignment - (location_counter % alignment)) % alignment
                     output_bytes.extend(b'\x00' * padding)
-                    location_counter += padding
                 continue
             
             if op not in OPCODES: raise ValueError(f"Error on line {line_num}: Unknown instruction '{op}'")
             opcode, funct3, funct7, fmt = OPCODES[op]
             binary_string = ""
-            if fmt == 'R':
-                rd, rs1, rs2 = REGS[parts[1]], REGS[parts[2]], REGS[parts[3]]
-                binary_string = f"{funct7}{rs2}{rs1}{funct3}{rd}{opcode}"
-            elif fmt == 'I':
-                rd, rs1, imm = REGS[parts[1]], REGS[parts[2]], int(parts[3], 0)
+            
+            operands = [p.strip() for p in tokens[1].split(',')]
+
+            if fmt == 'I':
+                rd, rs1, imm_str = REGS[operands[0]], REGS[operands[1]], operands[2]
+                imm = parse_immediate(imm_str, symbol_table)
                 binary_string = f"{to_binary(imm, 12)}{rs1}{funct3}{rd}{opcode}"
             elif fmt == 'I-load':
-                rd = REGS[parts[1]]
-                offset_part, rs1_part = parts[2].replace(')','').split('(')
-                rs1, imm = REGS[rs1_part], int(offset_part, 0)
+                rd = REGS[operands[0]]
+                match = re.match(r'(.+)\((.+)\)', operands[1])
+                imm_str, rs1_str = match.groups()
+                rs1 = REGS[rs1_str]
+                imm = parse_immediate(imm_str, symbol_table)
                 binary_string = f"{to_binary(imm, 12)}{rs1}{funct3}{rd}{opcode}"
+            elif fmt == 'U':
+                rd, imm_str = REGS[operands[0]], operands[1]
+                imm = parse_immediate(imm_str, symbol_table)
+                binary_string = f"{to_binary(imm, 20, signed=False)}{rd}{opcode}"
+            elif fmt == 'R':
+                rd, rs1, rs2 = REGS[operands[0]], REGS[operands[1]], REGS[operands[2]]
+                binary_string = f"{funct7}{rs2}{rs1}{funct3}{rd}{opcode}"
             elif fmt == 'S':
-                rs2 = REGS[parts[1]]
-                offset_part, rs1_part = parts[2].replace(')','').split('(')
-                rs1, imm = REGS[rs1_part], int(offset_part, 0)
+                rs2 = REGS[operands[0]]
+                match = re.match(r'(.+)\((.+)\)', operands[1])
+                imm_str, rs1_str = match.groups()
+                rs1 = REGS[rs1_str]
+                imm = parse_immediate(imm_str, symbol_table)
                 imm_bin = to_binary(imm, 12)
                 binary_string = f"{imm_bin[0:7]}{rs2}{rs1}{funct3}{imm_bin[7:12]}{opcode}"
             elif fmt == 'B':
-                rs1, rs2, label = REGS[parts[1]], REGS[parts[2]], parts[3]
+                rs1, rs2, label = REGS[operands[0]], REGS[operands[1]], operands[2]
                 offset = symbol_table[label] - location_counter
                 imm_bin = to_binary(offset, 13)
                 binary_string = f"{imm_bin[0]}{imm_bin[2:8]}{rs2}{rs1}{funct3}{imm_bin[8:12]}{imm_bin[1]}{opcode}"
-            elif fmt == 'U':
-                rd, imm = REGS[parts[1]], int(parts[2], 0)
-                binary_string = f"{to_binary(imm, 20, signed=False)}{rd}{opcode}"
             elif fmt == 'J':
-                rd, label = REGS[parts[1]], parts[2]
+                rd, label = REGS[operands[0]], operands[1]
                 offset = symbol_table[label] - location_counter
                 imm_bin = to_binary(offset, 21)
                 binary_string = f"{imm_bin[0]}{imm_bin[10:20]}{imm_bin[9]}{imm_bin[1:9]}{rd}{opcode}"
@@ -160,13 +233,12 @@ def second_pass(lines, symbol_table):
     return output_bytes
 
 def main(input_file, output_file):
-    """Main function to run the assembler."""
     try:
-        with open(input_file, 'r') as f:
+        with open(input_file, 'r', encoding='utf-8') as f:
             lines = [clean_line(line) for line in f.readlines() if clean_line(line)]
     except FileNotFoundError:
         print(f"Error: Input file '{input_file}' not found.")
-        return 
+        return
 
     try:
         symbol_table = first_pass(lines)
@@ -177,9 +249,7 @@ def main(input_file, output_file):
 
         output_bytes = second_pass(lines, symbol_table)
         
-
         output_dir = os.path.dirname(output_file)
-        
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir)
             print(f"Created directory: '{output_dir}'")
